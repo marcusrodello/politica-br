@@ -199,45 +199,67 @@ def lit(texto):
 
 con = duckdb.connect(BANCO)
 
-for tabela, desc in TABELAS.items():
-    alvo = "VIEW" if tabela == "bu" else "TABLE"
-    con.execute(f"COMMENT ON {alvo} {tabela} IS {lit(desc)}")
+# o catalogo cobre todos os schemas de fonte, nao so main: cada fonte vive no
+# seu (tse, camara, senado...) e main guarda o que atravessa fontes
+SCHEMAS = [s[0] for s in con.execute("""
+    SELECT schema_name FROM duckdb_schemas()
+    WHERE NOT internal AND database_name = 'politica_br' ORDER BY 1
+""").fetchall()]
 
-colunas = con.execute("""
-    SELECT table_name, column_name FROM duckdb_columns()
-    WHERE schema_name = 'main' AND NOT internal
-    ORDER BY table_name, column_index
+onde = {t: s for s, t in con.execute("""
+    SELECT schema_name, table_name FROM duckdb_tables()
+    UNION ALL SELECT schema_name, view_name FROM duckdb_views()
+    WHERE NOT internal
+""").fetchall()}
+
+for tabela, desc in TABELAS.items():
+    if tabela not in onde:
+        continue            # tabela ainda nao construida nesta base
+    alvo = "VIEW" if tabela == "bu" else "TABLE"
+    con.execute(f"COMMENT ON {alvo} {onde[tabela]}.{tabela} IS {lit(desc)}")
+
+colunas = con.execute(f"""
+    SELECT schema_name, table_name, column_name FROM duckdb_columns()
+    WHERE schema_name IN ({','.join("'" + s + "'" for s in SCHEMAS)})
+      AND NOT internal
+    ORDER BY schema_name, table_name, column_index
 """).fetchall()
 
 sem_descricao = []
-for tabela, coluna in colunas:
+for schema, tabela, coluna in colunas:
     desc = ESPECIFICAS.get((tabela, coluna)) or COMUNS.get(coluna)
     if desc is None:
-        sem_descricao.append(f"{tabela}.{coluna}")
+        sem_descricao.append(f"{schema}.{tabela}.{coluna}")
         continue
-    con.execute(f"COMMENT ON COLUMN {tabela}.{coluna} IS {lit(desc)}")
+    con.execute(f'COMMENT ON COLUMN {schema}.{tabela}."{coluna}" IS {lit(desc)}')
 
 # --- regera o dicionario a partir do catalogo -------------------------------
 objetos = con.execute("""
-SELECT table_name, comment, 'tabela' AS tipo FROM duckdb_tables()
+SELECT schema_name, table_name, comment, 'tabela' AS tipo FROM duckdb_tables()
 UNION ALL
-SELECT view_name, comment, 'view' FROM duckdb_views() WHERE NOT internal
-ORDER BY 3 DESC, 1
+SELECT schema_name, view_name, comment, 'view' FROM duckdb_views()
+WHERE NOT internal
+ORDER BY 1, 4 DESC, 2
 """).fetchall()
 
 linhas = ["# Dicionário de dados", "",
           "Gerado por `transformacao/documenta_banco.py` a partir do "
           "catálogo do banco.",
-          "Não editar à mão: a descrição vive no banco.", ""]
+          "Não editar à mão: a descrição vive no banco.", "",
+          "Uma fonte por schema; `main` guarda o que atravessa fontes.", ""]
 
-for nome, comentario, tipo in objetos:
+schema_atual = None
+for schema, nome, comentario, tipo in objetos:
+    if schema != schema_atual:
+        linhas += [f"# Schema `{schema}`", ""]
+        schema_atual = schema
     cols = con.execute("""
         SELECT column_name, data_type, comment FROM duckdb_columns()
-        WHERE table_name = ? AND schema_name = 'main'
+        WHERE table_name = ? AND schema_name = ?
         ORDER BY column_index
-    """, [nome]).fetchall()
-    n = con.execute(f'SELECT COUNT(*) FROM "{nome}"').fetchone()[0]
-    linhas += [f"## `{nome}` ({tipo})", "",
+    """, [nome, schema]).fetchall()
+    n = con.execute(f'SELECT COUNT(*) FROM {schema}."{nome}"').fetchone()[0]
+    linhas += [f"## `{schema}.{nome}` ({tipo})", "",
                comentario or "_sem descrição_", "",
                f"Linhas: {n:,}".replace(",", "."), "",
                "| Coluna | Tipo | Descrição |", "| --- | --- | --- |"]
@@ -250,9 +272,12 @@ with open(DOC, "w", encoding="utf-8") as fh:
 
 con.close()
 
-print(f"{len(colunas)} colunas no schema main; "
+print(f"{len(colunas)} colunas em {len(SCHEMAS)} schemas "
+      f"({', '.join(SCHEMAS)}); "
       f"{len(colunas) - len(sem_descricao)} documentadas")
 print(f"{DOC} regerado")
 if sem_descricao:
-    print("FALTAM descricoes: " + ", ".join(sem_descricao))
+    print(f"FALTAM {len(sem_descricao)} descricoes: "
+          + ", ".join(sem_descricao[:25])
+          + (" ..." if len(sem_descricao) > 25 else ""))
     sys.exit(1)

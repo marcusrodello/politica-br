@@ -209,7 +209,7 @@ def main():
     print("\n--- coletado do IBGE ---")
     print(con.sql("""
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas
-        FROM coleta WHERE fonte = 'ibge' GROUP BY 1 ORDER BY 3 DESC
+        FROM main.coleta WHERE fonte = 'ibge' GROUP BY 1 ORDER BY 3 DESC
     """))
     con.close()
     comum.log(f"concluido. falhas: {falhas if falhas else 'nenhuma'}")

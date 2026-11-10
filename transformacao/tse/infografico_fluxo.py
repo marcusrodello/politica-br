@@ -476,6 +476,7 @@ def main():
     saida = args[0] if args else SAIDA
 
     con = duckdb.connect(BANCO, read_only=True)
+    con.execute("USE tse")
     fluxos, oficial, meta = carrega(con)
     con.close()
 

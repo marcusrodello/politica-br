@@ -151,8 +151,11 @@ def _hash_de(arquivo):
 
 
 # =========================== registro de coleta ===========================
+# main.coleta, sempre qualificada: cada fonte vive no seu schema e os scripts
+# de transformacao usam USE <fonte>, entao um nome solto aqui criaria uma tabela
+# coleta dentro do schema da vez e o registro de procedencia se espalharia.
 CRIA_COLETA = """
-CREATE TABLE IF NOT EXISTS coleta (
+CREATE TABLE IF NOT EXISTS main.coleta (
   fonte VARCHAR, conjunto VARCHAR, arquivo VARCHAR, url VARCHAR,
   baixado_em TIMESTAMP, bytes BIGINT, linhas BIGINT, sha256 VARCHAR,
   observacao VARCHAR
@@ -165,14 +168,14 @@ def registra(con, fonte, conjunto, arquivo, url, bytes_, linhas, sha256,
     """Anota (ou atualiza) a coleta de um arquivo no registro do banco."""
     con.execute(CRIA_COLETA)
     tem = con.execute("""SELECT COUNT(*) FROM duckdb_columns()
-                         WHERE table_name = 'coleta'
+                         WHERE schema_name = 'main' AND table_name = 'coleta'
                            AND column_name = 'observacao'""").fetchone()[0]
     if not tem:            # banco criado antes da coluna existir
-        con.execute("ALTER TABLE coleta ADD COLUMN observacao VARCHAR")
-    con.execute("""DELETE FROM coleta
+        con.execute("ALTER TABLE main.coleta ADD COLUMN observacao VARCHAR")
+    con.execute("""DELETE FROM main.coleta
                    WHERE fonte = ? AND conjunto = ? AND arquivo = ?""",
                 [fonte, conjunto, arquivo])
-    con.execute("""INSERT INTO coleta VALUES (?,?,?,?,?,?,?,?,?)""",
+    con.execute("""INSERT INTO main.coleta VALUES (?,?,?,?,?,?,?,?,?)""",
                 [fonte, conjunto, arquivo, url, datetime.datetime.now(),
                  bytes_, linhas, sha256, observacao])
 

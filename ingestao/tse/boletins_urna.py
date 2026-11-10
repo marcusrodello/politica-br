@@ -77,7 +77,7 @@ def recursos():
 
 
 def ja_registrado(con, arquivo):
-    return con.execute("""SELECT COUNT(*) FROM coleta
+    return con.execute("""SELECT COUNT(*) FROM main.coleta
                           WHERE fonte = ? AND conjunto = ? AND arquivo = ?""",
                        [FONTE, CONJUNTO, arquivo]).fetchone()[0] > 0
 
@@ -93,9 +93,9 @@ def registra_retroativo(con, destino, arquivo, url):
     con.execute(comum.CRIA_COLETA)
     linhas = comum.linhas_parquet(con, destino)
     quando = datetime.datetime.fromtimestamp(os.path.getmtime(destino))
-    con.execute("DELETE FROM coleta WHERE fonte=? AND conjunto=? AND arquivo=?",
+    con.execute("DELETE FROM main.coleta WHERE fonte=? AND conjunto=? AND arquivo=?",
                 [FONTE, CONJUNTO, arquivo])
-    con.execute("INSERT INTO coleta VALUES (?,?,?,?,?,?,?,?,?)",
+    con.execute("INSERT INTO main.coleta VALUES (?,?,?,?,?,?,?,?,?)",
                 [FONTE, CONJUNTO, arquivo, url, quando,
                  os.path.getsize(destino), linhas, None,
                  "instante inferido da gravacao do Parquet, nao do download: "
@@ -176,7 +176,7 @@ def main():
     print(con.sql("""
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas,
                round(SUM(bytes) / 1e6, 1) AS mb, min(baixado_em)::DATE AS coletado_em
-        FROM coleta WHERE fonte = 'tse' GROUP BY 1 ORDER BY 3 DESC
+        FROM main.coleta WHERE fonte = 'tse' GROUP BY 1 ORDER BY 3 DESC
     """))
     con.close()
 

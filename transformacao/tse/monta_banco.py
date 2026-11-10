@@ -1,4 +1,9 @@
-"""Monta o banco DuckDB e a tabela-insumo do infografico de fluxo.
+"""Monta as tabelas do TSE no schema tse e o insumo do infografico de fluxo.
+
+Cada fonte vive no seu schema (tse, camara, senado...), e nao em main, porque
+os nomes naturais dessas tabelas sao genericos: `local`, `secao` e `votos_local`
+colidiriam com a segunda fonte que precisasse dos mesmos nomes. Em main fica
+so o que atravessa fontes - hoje, a tabela coleta.
 
 Decisoes que vem da analise dos dados:
 
@@ -32,6 +37,17 @@ con = duckdb.connect(BANCO)
 con.execute("SET preserve_insertion_order=false")
 con.execute("SET memory_limit='6GB'")
 con.execute(f"SET temp_directory='{os.path.join(BASE, '_tmp').replace(chr(92), '/')}'")
+
+con.execute("CREATE SCHEMA IF NOT EXISTS tse")
+con.execute("USE tse")
+
+# residuo da epoca em que tudo vivia em main, antes de haver uma segunda fonte.
+# Em base nova nao existe nada disso e o DROP nao faz nada; em base antiga,
+# evita conviver com duas copias das mesmas tabelas, uma delas desatualizando.
+for velha in ("bu", "secao", "local", "votos_local", "fluxo_insumo",
+              "fluxo_estimado"):
+    con.execute(f"DROP VIEW IF EXISTS main.{velha}")
+    con.execute(f"DROP TABLE IF EXISTS main.{velha}")
 
 con.execute(f"CREATE OR REPLACE VIEW bu AS SELECT * FROM read_parquet('{PQ}')")
 

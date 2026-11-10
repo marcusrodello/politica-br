@@ -112,7 +112,7 @@ def main():
     print("\n--- coletado do Banco Central ---")
     print(con.sql("""
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas
-        FROM coleta WHERE fonte = 'bcb' GROUP BY 1
+        FROM main.coleta WHERE fonte = 'bcb' GROUP BY 1
     """))
     con.close()
     comum.log(f"concluido. falhas: {falhas if falhas else 'nenhuma'}")

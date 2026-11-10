@@ -212,7 +212,7 @@ def main():
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas,
                round(SUM(bytes) / 1e6, 1) AS mb,
                min(baixado_em)::DATE AS coletado_em
-        FROM coleta WHERE fonte = 'camara' GROUP BY 1 ORDER BY 3 DESC
+        FROM main.coleta WHERE fonte = 'camara' GROUP BY 1 ORDER BY 3 DESC
     """))
     con.close()
 

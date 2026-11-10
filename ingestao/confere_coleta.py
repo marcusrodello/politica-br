@@ -43,7 +43,7 @@ def main():
     arg = [fonte] if fonte else []
     linhas = con.execute(f"""
         SELECT fonte, conjunto, arquivo, url, bytes, linhas
-        FROM coleta {onde} ORDER BY fonte, conjunto, arquivo
+        FROM main.coleta {onde} ORDER BY fonte, conjunto, arquivo
     """, arg).fetchall()
     con.close()
 

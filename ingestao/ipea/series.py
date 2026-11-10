@@ -138,7 +138,7 @@ def main():
     print("\n--- coletado do Ipeadata ---")
     print(con.sql("""
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas
-        FROM coleta WHERE fonte = 'ipea' GROUP BY 1 ORDER BY 3 DESC
+        FROM main.coleta WHERE fonte = 'ipea' GROUP BY 1 ORDER BY 3 DESC
     """))
     con.close()
     comum.log(f"concluido. temas com falha: {falhas}")

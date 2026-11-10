@@ -448,6 +448,7 @@ def main():
     con.execute("SET preserve_insertion_order=false")
     con.execute("SET memory_limit='6GB'")
     con.execute(f"SET temp_directory='{os.path.join(BASE, '_tmp').replace(chr(92), '/')}'")
+    con.execute("USE tse")      # le fluxo_insumo e local, grava fluxo_estimado
 
     linhas = []
 

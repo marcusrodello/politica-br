@@ -206,7 +206,7 @@ def main():
     print(con.sql("""
         SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas,
                round(SUM(bytes) / 1e6, 1) AS mb
-        FROM coleta WHERE fonte = 'tse' GROUP BY 1 ORDER BY 3 DESC
+        FROM main.coleta WHERE fonte = 'tse' GROUP BY 1 ORDER BY 3 DESC
     """))
     con.close()
     comum.log(f"concluido: {feitos} novos. "
