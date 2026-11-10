@@ -105,9 +105,33 @@ Nada em `dados/` ou `_tmp/` está versionado.
 
 | Fonte | Como se acessa |
 | --- | --- |
-| TSE | CKAN em `dadosabertos.tse.jus.br`, pacotes ZIP por UF e turno |
-| Câmara | arquivos em lote CSV em `dadosabertos.camara.leg.br/arquivos`; a API v2 responde 503 em rajadas e exigiria dezenas de milhares de requisições para o mesmo conteúdo |
-| Senado | API JSON em `legis.senado.leg.br/dadosabertos`; os endpoints clássicos (`/materia`, `/plenario/lista/votacao`) estão depreciados — os vivos são `/processo` e `/votacao` |
-| STF | sem dados abertos estruturados acessíveis: o portal é uma SPA, o Corte Aberta responde 403 e a API de jurisprudência não aceita GET |
-| Executivo | Portal da Transparência e `dados.gov.br` passaram a exigir chave de API; SICONFI (Tesouro) e SGS (Banco Central) são abertos |
-| IBGE e Ipea | `servicodados.ibge.gov.br` e OData do Ipeadata, abertos |
+| TSE | CKAN em `dadosabertos.tse.jus.br`. Boletins de urna em ZIP por UF e turno; o acervo histórico (1933–2026) em ZIP por ano, com um CSV por UF dentro |
+| Câmara | arquivos em lote CSV em `dadosabertos.camara.leg.br/arquivos`. A API v2 responde 503 em rajadas e exigiria dezenas de milhares de requisições paginadas para o mesmo conteúdo |
+| Senado | API JSON em `legis.senado.leg.br/dadosabertos`. Os endpoints clássicos (`/materia`, `/plenario/lista/votacao`) estão depreciados com data de desativação vencida — os vivos são `/processo` e `/votacao` |
+| Ipeadata | OData em `ipeadata.gov.br/api/odata4`, uma requisição por série. É agregador: o catálogo aponta a fonte primária de cada série, e é ela que o portal cita |
+| IBGE | `servicodados.ibge.gov.br`, API v1 de localidades e v3 do SIDRA |
+| Banco Central | SGS em `api.bcb.gov.br/dados/serie`. Sem catálogo por API — as séries entram por lista explícita |
+| Judiciário | DataJud do CNJ (`api-publica.datajud.cnj.jus.br`), que recebe os dados dos tribunais por obrigação normativa. **Exige chave** |
+| Executivo | Portal da Transparência e `dados.gov.br` **exigem chave**. SICONFI (Tesouro) é aberto |
+
+### O que o STF não dá
+
+Não há dados abertos estruturados acessíveis: o portal de dados abertos é uma
+aplicação de página única que não serve JSON para fora, o Corte Aberta é um
+painel Qlik Sense cujos números só saem por engine websocket, e a API de
+jurisprudência não aceita GET. Raspar qualquer um dos três daria um pipeline
+que quebra no próximo deploy do tribunal. A via usada é o DataJud.
+
+### Chaves de API que precisam de cadastro
+
+Três fontes passaram a exigir credencial pessoal. Os scripts leem a chave de
+variável de ambiente e nunca do código, que é público.
+
+| Fonte | Onde se cadastra | Variável |
+| --- | --- | --- |
+| DataJud (CNJ) | `datajud.cnj.jus.br` → Meu Perfil → API Key | `POLITICA_BR_DATAJUD_KEY` |
+| Portal da Transparência | `portaldatransparencia.gov.br/api-de-dados` | não implementado |
+| dados.gov.br | `dados.gov.br` | não implementado |
+
+A chave pública compartilhada do DataJud, que circulava no tutorial de 2023,
+foi desativada e hoje responde 401.
