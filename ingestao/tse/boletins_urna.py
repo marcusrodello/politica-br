@@ -3,7 +3,7 @@
 Para cada UF e turno: baixa o pacote bweb do TSE, filtra Presidente e Governador,
 grava em Parquet e descarta o material bruto. Pico de disco = o maior CSV.
 
-Uso:  python ingere_bu.py
+Uso:  python ingestao/tse/boletins_urna.py
 Retomavel: pula o que ja tem Parquet gravado.
 """
 import io
@@ -15,8 +15,9 @@ import zipfile
 
 import duckdb
 
-BASE = r"F:\ELEICOES_2026"
-PQ = os.path.join(BASE, "parquet")
+# raiz do repositorio, derivada do proprio arquivo: ingestao/tse/ -> duas acima
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PQ = os.path.join(BASE, "dados", "parquet", "tse", "bu_2026")
 TMP = os.path.join(BASE, "_tmp")
 CKAN = ("https://dadosabertos.tse.jus.br/api/3/action/"
         "package_show?id=resultados-2026-boletim-de-urna")

@@ -22,9 +22,11 @@ import os
 
 import duckdb
 
-BASE = r"F:\ELEICOES_2026"
-PQ = os.path.join(BASE, "parquet", "*.parquet").replace("\\", "/")
-BANCO = os.path.join(BASE, "eleicoes2026.duckdb")
+# raiz do repositorio, derivada do proprio arquivo: transformacao/tse/ -> duas acima
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PQ = os.path.join(BASE, "dados", "parquet", "tse", "bu_2026",
+                  "*.parquet").replace("\\", "/")
+BANCO = os.path.join(BASE, "dados", "politica_br.duckdb")
 
 con = duckdb.connect(BANCO)
 con.execute("SET preserve_insertion_order=false")

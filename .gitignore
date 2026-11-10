@@ -1,5 +1,5 @@
-# dados e banco: tudo se regera dos scripts
-parquet/
+# dados e banco: tudo se regera dos scripts de ingestao
+dados/
 _tmp/
 *.duckdb
 *.duckdb.wal

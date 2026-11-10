@@ -11,15 +11,16 @@ import sys
 
 import duckdb
 
-BASE = r"F:\ELEICOES_2026"
-BANCO = os.path.join(BASE, "eleicoes2026.duckdb")
-DOC = os.path.join(BASE, "DICIONARIO.md")
+# raiz do repositorio, derivada do proprio arquivo: transformacao/tse/ -> duas acima
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BANCO = os.path.join(BASE, "dados", "politica_br.duckdb")
+DOC = os.path.join(BASE, "docs", "dicionario-tse-2026.md")
 
 TABELAS = {
     "bu": "Boletins de urna de 2026 (Presidente e Governador, 1o e 2o turno) "
           "como vieram do TSE. Uma linha por secao, cargo e votavel. Origem: "
           "CSV bweb do Portal de Dados Abertos, gravado pelo TSE; carregado "
-          "por ingere_bu.py.",
+          "por ingestao/tse/boletins_urna.py.",
     "secao": "Eleitorado de cada secao em cada cargo. Uma linha por turno, "
              "cargo e secao. Derivada de bu. A chave inclui o cargo porque "
              "aptos e comparecimento divergem entre Presidente e Governador "
@@ -141,8 +142,9 @@ SELECT view_name, comment, 'view' FROM duckdb_views() WHERE NOT internal
 ORDER BY 3 DESC, 1
 """).fetchall()
 
-linhas = ["# Dicionário de dados — eleições 2026", "",
-          "Gerado por `documenta_banco.py` a partir do catálogo do banco.",
+linhas = ["# Dicionário de dados — TSE, eleição de 2026", "",
+          "Gerado por `transformacao/tse/documenta_banco.py` a partir do "
+          "catálogo do banco.",
           "Não editar à mão: a descrição vive no banco.", ""]
 
 for nome, comentario, tipo in objetos:
