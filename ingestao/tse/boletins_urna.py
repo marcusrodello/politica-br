@@ -3,22 +3,31 @@
 Para cada UF e turno: baixa o pacote bweb do TSE, filtra Presidente e Governador,
 grava em Parquet e descarta o material bruto. Pico de disco = o maior CSV.
 
+Passa por ingestao/comum.py como as demais fontes, para a procedencia de cada
+pacote ficar registrada na tabela coleta. Arquivo que ja existe de uma coleta
+anterior a esse registro e anotado com o instante inferido da gravacao do
+Parquet - inferido, e dito como tal na observacao, em vez de rebaixar 56
+pacotes de gigabytes so para ter a data exata.
+
 Uso:  python ingestao/tse/boletins_urna.py
 Retomavel: pula o que ja tem Parquet gravado.
 """
-import io
+import datetime
 import os
 import sys
 import time
-import urllib.request
 import zipfile
 
-import duckdb
+# ingestao/tse/ -> uma acima, para achar comum.py
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# raiz do repositorio, derivada do proprio arquivo: ingestao/tse/ -> duas acima
-BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import comum                                                  # noqa: E402
+
+FONTE = "tse"
+CONJUNTO = "bu_2026"
+BASE = comum.BASE
 PQ = os.path.join(BASE, "dados", "parquet", "tse", "bu_2026")
-TMP = os.path.join(BASE, "_tmp")
+TMP = comum.TMP
 CKAN = ("https://dadosabertos.tse.jus.br/api/3/action/"
         "package_show?id=resultados-2026-boletim-de-urna")
 CARGOS = ("Presidente", "Governador")
@@ -49,15 +58,12 @@ COLUNAS = """
 """
 
 
-def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+log = comum.log
 
 
 def recursos():
     """URLs dos 56 pacotes bweb, com UF e turno deduzidos do nome do arquivo."""
-    import json
-    with urllib.request.urlopen(CKAN, timeout=60) as r:
-        dados = json.load(r)
+    dados = comum.pega_json(CKAN, tempo=90)
     saida = []
     for rec in dados["result"]["resources"]:
         url = rec["url"]
@@ -70,30 +76,59 @@ def recursos():
     return sorted(saida)
 
 
+def ja_registrado(con, arquivo):
+    return con.execute("""SELECT COUNT(*) FROM coleta
+                          WHERE fonte = ? AND conjunto = ? AND arquivo = ?""",
+                       [FONTE, CONJUNTO, arquivo]).fetchone()[0] > 0
+
+
+def registra_retroativo(con, destino, arquivo, url):
+    """Anota um pacote que ja estava em disco antes de existir o registro.
+
+    O instante vem da gravacao do Parquet, nao do download - sao proximos, mas
+    nao sao a mesma coisa, e a observacao diz isso. A alternativa seria apagar
+    e rebaixar 56 pacotes de gigabytes para ganhar precisao de minutos numa
+    data que o portal publica por dia.
+    """
+    con.execute(comum.CRIA_COLETA)
+    linhas = comum.linhas_parquet(con, destino)
+    quando = datetime.datetime.fromtimestamp(os.path.getmtime(destino))
+    con.execute("DELETE FROM coleta WHERE fonte=? AND conjunto=? AND arquivo=?",
+                [FONTE, CONJUNTO, arquivo])
+    con.execute("INSERT INTO coleta VALUES (?,?,?,?,?,?,?,?,?)",
+                [FONTE, CONJUNTO, arquivo, url, quando,
+                 os.path.getsize(destino), linhas, None,
+                 "instante inferido da gravacao do Parquet, nao do download: "
+                 "coleta anterior ao registro de procedencia"])
+
+
 def processa(uf, turno, url, con):
-    destino = os.path.join(PQ, f"bu_{turno}_{uf}.parquet")
+    arquivo = f"bu_{turno}_{uf}.parquet"
+    destino = os.path.join(PQ, arquivo)
     if os.path.exists(destino):
         # existir nao basta: uma execucao interrompida deixa Parquet truncado,
         # que so da erro muito depois, na leitura. Confirma que abre.
-        try:
-            con.execute("SELECT COUNT(*) FROM read_parquet(?)",
-                        [destino.replace("\\", "/")]).fetchone()
-            log(f"{uf} {turno}: ja existe, pulando")
+        if comum.parquet_valido(con, destino):
+            if not ja_registrado(con, arquivo):
+                registra_retroativo(con, destino, arquivo, url)
+                log(f"{uf} {turno}: ja existe; procedencia registrada")
+            else:
+                log(f"{uf} {turno}: ja existe, pulando")
             return "pulado"
-        except Exception:
-            log(f"{uf} {turno}: Parquet truncado, refazendo")
-            os.remove(destino)
+        log(f"{uf} {turno}: Parquet truncado, refazendo")
+        os.remove(destino)
 
     t0 = time.time()
     csv_local = os.path.join(TMP, f"{uf}_{turno}.csv")
+    zip_local = os.path.join(TMP, f"{uf}_{turno}.zip")
+    bytes_, sha = None, None
     if os.path.exists(csv_local):
         # sobra de uma execucao anterior que falhou depois do download
-        mb = os.path.getsize(csv_local) / 1024 / 1024
-        log(f"{uf} {turno}: reaproveitando CSV em disco ({mb:,.0f} MB)")
+        bytes_ = os.path.getsize(csv_local)
+        log(f"{uf} {turno}: reaproveitando CSV em disco "
+            f"({bytes_ / 1e6:,.0f} MB)")
     else:
-        zip_local = os.path.join(TMP, f"{uf}_{turno}.zip")
-        urllib.request.urlretrieve(url, zip_local)
-        mb = os.path.getsize(zip_local) / 1024 / 1024
+        bytes_, sha, _ = comum.baixa(url, zip_local)
         with zipfile.ZipFile(zip_local) as z:
             nome_csv = next(n for n in z.namelist() if n.lower().endswith(".csv"))
             with z.open(nome_csv) as fonte, open(csv_local, "wb") as alvo:
@@ -105,21 +140,13 @@ def processa(uf, turno, url, con):
         os.remove(zip_local)
 
     lista = ", ".join(f"'{c}'" for c in CARGOS)
-    csv_sql = csv_local.replace("\\", "/")
-    dest_sql = destino.replace("\\", "/")
-    con.execute(f"""
-        COPY (
-          SELECT {COLUNAS}
-          FROM read_csv('{csv_sql}', delim=';', header=true, encoding='latin-1',
-                        quote='"', all_varchar=true)
-          WHERE DS_CARGO_PERGUNTA IN ({lista})
-        ) TO '{dest_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
-    """)
-    linhas = con.execute(
-        f"SELECT COUNT(*) FROM read_parquet('{dest_sql}')").fetchone()[0]
+    linhas, obs = comum.csv_para_parquet(
+        con, csv_local, destino, selecao=COLUNAS, delim=";",
+        encoding="latin-1", onde=f"DS_CARGO_PERGUNTA IN ({lista})")
     os.remove(csv_local)
+    comum.registra(con, FONTE, CONJUNTO, arquivo, url, bytes_, linhas, sha, obs)
 
-    log(f"{uf} {turno}: {mb:,.0f} MB baixados -> {linhas:,} linhas "
+    log(f"{uf} {turno}: {bytes_ / 1e6:,.0f} MB baixados -> {linhas:,} linhas "
         f"({time.time() - t0:,.0f}s)")
     return "ok"
 
@@ -127,13 +154,11 @@ def processa(uf, turno, url, con):
 def main():
     os.makedirs(PQ, exist_ok=True)
     os.makedirs(TMP, exist_ok=True)
-    con = duckdb.connect()
-    # os CSVs de SP, MG, RJ, BA e CE passam de 1 GB; sem teto de memoria e sem
-    # area de spill o leitor estoura os 16 GB da maquina.
-    con.execute("SET preserve_insertion_order=false")
-    con.execute("SET memory_limit='5GB'")
+    # o banco entra na jogada porque a coleta de cada pacote fica registrada
+    # nele; os CSVs de SP, MG, RJ, BA e CE passam de 1 GB, e sem teto de
+    # memoria e area de descarga o leitor estoura os 16 GB da maquina
+    con = comum.abre_banco()
     con.execute("SET threads=4")
-    con.execute(f"SET temp_directory='{TMP.replace(chr(92), '/')}'")
 
     pacotes = recursos()
     log(f"{len(pacotes)} pacotes a processar")
@@ -146,6 +171,14 @@ def main():
             falhas.append((uf, turno))
         if i % 10 == 0:
             log(f"--- progresso: {i}/{len(pacotes)}")
+
+    print("\n--- coletado do TSE ---")
+    print(con.sql("""
+        SELECT conjunto, COUNT(*) AS arquivos, SUM(linhas) AS linhas,
+               round(SUM(bytes) / 1e6, 1) AS mb, min(baixado_em)::DATE AS coletado_em
+        FROM coleta WHERE fonte = 'tse' GROUP BY 1 ORDER BY 3 DESC
+    """))
+    con.close()
 
     log(f"concluido. falhas: {falhas if falhas else 'nenhuma'}")
     return 1 if falhas else 0
