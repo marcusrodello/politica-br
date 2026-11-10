@@ -1,0 +1,10 @@
+# dados e banco: tudo se regera dos scripts
+parquet/
+_tmp/
+*.duckdb
+*.duckdb.wal
+*.log
+
+# python
+__pycache__/
+*.pyc
