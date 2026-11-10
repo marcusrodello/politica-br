@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -180,18 +181,60 @@ def registra(con, fonte, conjunto, arquivo, url, bytes_, linhas, sha256,
                  bytes_, linhas, sha256, observacao])
 
 
-def abre_banco(somente_leitura=False):
+def memoria_livre_gb():
+    """RAM fisica livre, em GB. Devolve None quando nao da para saber."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            s = Status()
+            s.dwLength = ctypes.sizeof(Status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s)):
+                return s.ullAvailPhys / 1024 ** 3
+        else:
+            with open("/proc/meminfo") as fh:
+                for linha in fh:
+                    if linha.startswith("MemAvailable:"):
+                        return int(linha.split()[1]) / 1024 ** 2
+    except Exception:
+        pass
+    return None
+
+
+def abre_banco(somente_leitura=False, teto_gb=6):
     """Conexao padrao: teto de memoria e area de descarga em disco.
 
-    Sem os dois, um CSV grande - o de Sao Paulo tem 7,7 GB - estoura a memoria
-    da maquina no meio da carga.
+    Sem area de descarga, um CSV grande - o de Sao Paulo tem 7,7 GB - estoura a
+    memoria da maquina no meio da carga.
+
+    O TETO SE ADAPTA AO QUE A MAQUINA TEM NA HORA. Pedir 6 GB numa maquina com
+    2 GB livres nao faz o DuckDB economizar: faz ele aceitar o pedido e falhar
+    com Allocation failure na primeira alocacao grande - foi o que derrubou a
+    coleta de colegiados do Senado enquanto o navegador ocupava a memoria. Com
+    teto menor ele desce para o disco e fica mais lento, o que e um preco
+    melhor que perder a coleta.
     """
     import duckdb
     os.makedirs(TMP, exist_ok=True)
     con = duckdb.connect(BANCO, read_only=somente_leitura)
     con.execute("SET preserve_insertion_order=false")
     if not somente_leitura:
-        con.execute("SET memory_limit='6GB'")
+        livre = memoria_livre_gb()
+        gb = teto_gb if livre is None else max(1, min(teto_gb, int(livre - 1)))
+        if livre is not None and gb < teto_gb:
+            log(f"memoria livre {livre:.1f} GB; teto do banco em {gb} GB "
+                f"(descarga em disco cobre o resto)")
+        con.execute(f"SET memory_limit='{gb}GB'")
         con.execute(f"SET temp_directory='{sql(TMP)}'")
     return con
 

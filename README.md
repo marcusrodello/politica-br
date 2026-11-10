@@ -28,11 +28,21 @@ docs/                      brief, dicionário de dados, notas por módulo e info
 Uma pasta por fonte, dentro de `ingestao/` e `transformacao/`. Banco único em
 `dados/politica_br.duckdb`.
 
-Toda ingestão passa por `ingestao/comum.py`, que grava na tabela `coleta` a URL,
+**Um schema por fonte** — `tse.bu`, `camara.voto`, `senado.senador`. Em `main`
+fica só o que atravessa fontes: hoje, a tabela `coleta`. Sem essa separação a
+segunda fonte colide, porque os nomes naturais dessas tabelas são genéricos:
+`local`, `secao` e `votos_local` não pertencem ao TSE por direito de chegada.
+
+Toda ingestão passa por `ingestao/comum.py`, que grava em `main.coleta` a URL,
 o instante, o tamanho e o sha256 de cada arquivo que entrou — é o que sustenta a
 promessa de rastreabilidade. O download confere o tamanho contra o que o portal
 declara: um arquivo cortado no meio falha em vez de entrar na base como se
 estivesse bom.
+
+Os Parquets guardam **texto puro**, de propósito: campo que muda de formato no
+meio de uma série histórica derruba a leitura inteira. A tipagem acontece na
+transformação, com `TRY_CAST`, e cada script conta e imprime o que não
+converteu — senão o estrago fica silencioso.
 
 ## Estado atual
 

@@ -49,6 +49,7 @@ API = "https://legis.senado.leg.br/dadosabertos"
 ANO_FIM = 2026
 ANO_LIMITE = 1826
 PAUSA = 0.15        # segundos entre chamadas por parlamentar, por educacao
+TAM_LOTE = 400      # parlamentares por Parquet nos conjuntos por parlamentar
 
 SIMPLES = {
     "legislaturas": "plenario/lista/legislaturas",
@@ -234,34 +235,54 @@ def faz_senadores(con, con_legislaturas):
 
 
 def faz_por_parlamentar(con, conjunto, molde):
+    """Consulta um endpoint por parlamentar, gravando em lotes.
+
+    EM LOTES, e nao num arquivo no fim: sao 2.052 consultas a uma API que
+    estoura o tempo de leitura com alguma frequencia, e acumular tudo em
+    memoria para gravar no fim significa que uma falha na consulta 2.000 joga
+    fora quarenta minutos de coleta. Cada lote fechado fica no disco e a
+    reexecucao continua do lote seguinte.
+    """
     if existe(con, conjunto, "completo"):
-        comum.log(f"  {conjunto}: ja existe, pulando")
+        # formato da primeira versao, de um arquivo unico; se ja esta ai e
+        # valido, nao ha razao para refazer em lotes
+        comum.log(f"  {conjunto}: ja existe em arquivo unico, pulando")
         return
     codigos = codigos_de_senador(con)
     if not codigos:
         comum.log(f"  {conjunto}: sem lista de senadores, pulando")
         return
-    comum.log(f"  {conjunto}: consultando {len(codigos)} parlamentares")
-    tudo, vazios = [], 0
-    for i, cod in enumerate(codigos, 1):
-        try:
-            registros = baixa_lista(molde.format(cod=cod))
-        except Exception as e:
-            comum.log(f"    {cod}: {type(e).__name__}, seguindo")
-            registros = []
-        if registros:
-            for r in registros:
-                r["codigoParlamentar"] = cod
-            tudo += registros
+
+    blocos = [codigos[i:i + TAM_LOTE]
+              for i in range(0, len(codigos), TAM_LOTE)]
+    comum.log(f"  {conjunto}: {len(codigos)} parlamentares em "
+              f"{len(blocos)} lotes de ate {TAM_LOTE}")
+    for n, bloco in enumerate(blocos, 1):
+        nome = f"lote_{n:04d}"
+        if existe(con, conjunto, nome):
+            comum.log(f"    {nome}: ja existe, pulando")
+            continue
+        tudo, vazios = [], 0
+        for cod in bloco:
+            try:
+                registros = baixa_lista(molde.format(cod=cod))
+            except Exception as e:
+                comum.log(f"    {cod}: {type(e).__name__}, seguindo")
+                registros = []
+            if registros:
+                for r in registros:
+                    r["codigoParlamentar"] = cod
+                tudo += registros
+            else:
+                vazios += 1
+            time.sleep(PAUSA)
+        if tudo:
+            grava(con, conjunto, nome, f"{API}/{molde}", tudo,
+                  observacao=f"{len(bloco)} consultas por parlamentar "
+                             f"(codigos {bloco[0]} a {bloco[-1]}); "
+                             f"{vazios} sem registro")
         else:
-            vazios += 1
-        if i % 200 == 0:
-            comum.log(f"    {i}/{len(codigos)}, {len(tudo):,} registros")
-        time.sleep(PAUSA)
-    if tudo:
-        grava(con, conjunto, "completo", f"{API}/{molde}", tudo,
-              observacao=f"uniao de {len(codigos)} consultas por parlamentar; "
-                         f"{vazios} sem registro")
+            comum.log(f"    {nome}: nenhum registro no lote")
 
 
 def main():
