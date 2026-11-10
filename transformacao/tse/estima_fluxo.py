@@ -303,8 +303,16 @@ def estima(d, por_uf=True, com_media=True, replicas=REPLICAS):
             origem_r = [(b["X"] * (b["w"] * c[b["mun"]])[:, None]).sum(axis=0)
                         for b, c in zip(bl, contagens)]
             pilha["MEDIA"].append(media_ponderada(betas, origem_r))
-    faixas = {k: np.nanpercentile(np.array(v), [2.5, 97.5], axis=0)
-              for k, v in pilha.items()}
+    faixas = {}
+    for k, v in pilha.items():
+        lo, hi = np.nanpercentile(np.array(v), [2.5, 97.5], axis=0)
+        # a faixa precisa conter a estimativa publicada. Em celula mal
+        # identificada - fluxo de poucos milhares de eleitores, onde o dado nao
+        # decide nada - o percentil do bootstrap as vezes cai todo de um lado do
+        # ponto, e sair uma tabela dizendo "616 eleitores, faixa de 3.040 a
+        # 8.891" parece erro de conta. Alargar e honesto; estreitar nunca.
+        faixas[k] = np.array([np.minimum(lo, saida[k]),
+                              np.maximum(hi, saida[k])])
     return saida, faixas, bl
 
 
