@@ -1,11 +1,11 @@
-# Dicionário de dados — eleições 2026
+# Dicionário de dados — TSE, eleição de 2026
 
-Gerado por `documenta_banco.py` a partir do catálogo do banco.
+Gerado por `transformacao/tse/documenta_banco.py` a partir do catálogo do banco.
 Não editar à mão: a descrição vive no banco.
 
 ## `bu` (view)
 
-Boletins de urna de 2026 (Presidente e Governador, 1o e 2o turno) como vieram do TSE. Uma linha por secao, cargo e votavel. Origem: CSV bweb do Portal de Dados Abertos, gravado pelo TSE; carregado por ingere_bu.py.
+Boletins de urna de 2026 (Presidente e Governador, 1o e 2o turno) como vieram do TSE. Uma linha por secao, cargo e votavel. Origem: CSV bweb do Portal de Dados Abertos, gravado pelo TSE; carregado por ingestao/tse/boletins_urna.py.
 
 Linhas: 9.042.567
 
