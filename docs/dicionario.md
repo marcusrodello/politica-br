@@ -1,6 +1,6 @@
-# Dicionário de dados — TSE, eleição de 2026
+# Dicionário de dados
 
-Gerado por `transformacao/tse/documenta_banco.py` a partir do catálogo do banco.
+Gerado por `transformacao/documenta_banco.py` a partir do catálogo do banco.
 Não editar à mão: a descrição vive no banco.
 
 ## `bu` (view)
@@ -33,6 +33,47 @@ Linhas: 9.042.567
 | `dt_encerramento` | TIMESTAMP | Instante do encerramento, tambem no horario local da urna. Vem de DT_ENCERRAMENTO. |
 | `nr_urna` | BIGINT | Numero de serie da urna que gerou o boletim. Vem de NR_URNA_EFETIVADA. |
 | `biom_sem_habilitacao` | BIGINT | Eleitores da secao sem habilitacao biometrica. Vem de QT_ELEI_BIOM_SEM_HABILITACAO. Unidade: eleitor. |
+
+## `coleta` (tabela)
+
+Registro de procedencia: uma linha por arquivo que entrou na base, com a URL de origem, o instante do download, o tamanho, as linhas e o sha256. E o que sustenta a promessa de que cada numero do portal volta a fonte oficial e a data da coleta. Gravada por ingestao/comum.py; conferida contra os portais por ingestao/confere_coleta.py.
+
+Linhas: 420
+
+| Coluna | Tipo | Descrição |
+| --- | --- | --- |
+| `fonte` | VARCHAR | Orgao de origem do arquivo: 'tse', 'camara', 'senado' e assim por diante. Define a pasta em dados/parquet e, no banco, o schema da fonte. |
+| `conjunto` | VARCHAR | Conjunto de dados dentro da fonte, no nome que o proprio portal usa: 'votacoesVotos', 'proposicoes', 'bu_2026'. |
+| `arquivo` | VARCHAR | Nome do Parquet gravado em dados/parquet/<fonte>/<conjunto>/. |
+| `url` | VARCHAR | URL exata de onde o arquivo foi baixado, para qualquer pessoa refazer o caminho ate a fonte oficial. |
+| `baixado_em` | TIMESTAMP | Instante do download, no horario local da maquina que rodou a ingestao. E a 'data da coleta' que o portal cita ao lado de cada numero. |
+| `bytes` | BIGINT | Tamanho do arquivo baixado da origem, em bytes, conferido contra o Content-Length declarado pelo portal - download incompleto falha em vez de entrar na base. |
+| `linhas` | BIGINT | Linhas gravadas no Parquet resultante. |
+| `sha256` | VARCHAR | Hash do conteudo baixado, para detectar que a origem mudou entre duas coletas. |
+| `observacao` | VARCHAR | Vazio quando a carga foi limpa. Quando o CSV de origem nao obedece ao padrao, guarda quantas linhas e de que tipo foi o defeito, e como o leitor foi relaxado - para o caminho diferente nao ficar invisivel depois. |
+
+## `fluxo_estimado` (tabela)
+
+Matriz de fluxo de votos do 1o para o 2o turno, ESTIMADA por regressao ecologica no nivel do local de votacao, por transformacao/tse/estima_fluxo.py. Uma linha por cargo, escopo, origem e destino. NAO e migracao medida: o voto e secreto e o dado e agregado, entao movimentos opostos dentro do mesmo local se cancelam (falacia ecologica) e o que sai aqui e o fluxo LIQUIDO - a lealdade de um candidato e um teto e a troca entre candidatos um piso. Cada celula vem com faixa de 95% por bootstrap de municipios; faixa larga significa que o dado nao decide aquela celula.
+
+Linhas: 1.760
+
+| Coluna | Tipo | Descrição |
+| --- | --- | --- |
+| `cargo` | VARCHAR | 'Presidente' tem matriz por UF e matriz nacional. 'Governador' so tem matriz por UF, e apenas nas 6 que tiveram 2o turno (AC, AM, DF, ES, RN, TO): cada estado disputou entre candidatos proprios, e uma matriz nacional misturaria nomes que nunca estiveram na mesma urna. |
+| `escopo` | VARCHAR | Recorte em que a regressao rodou: 'UF' para a matriz estimada dentro de um estado, 'BRASIL' para a media das 27 matrizes estaduais ponderada pelos eleitores de cada origem - esse e o numero publicado - e 'BRASIL_DIRETO' para uma unica regressao no pais inteiro, que fica gravada so como contraste: ela supoe comportamento igual em todo o territorio e por isso crava 0% ou 100% em 27 das 50 celulas, contra 2 na estimativa por UF. |
+| `uf` | VARCHAR | Sigla da UF quando escopo = 'UF'; NULL nos escopos nacionais. O exterior ('ZZ') nao entra: sao poucos locais para a regressao. |
+| `origem` | VARCHAR | Rotulo escolhido no 1o turno: candidato, BRANCO, NULO, ABSTENCAO, ou OUTROS para o conjunto dos candidatos com menos de 0,2% dos aptos, cuja coluna de regressao e quase constante entre locais e nao identifica coeficiente proprio. |
+| `destino` | VARCHAR | Rotulo escolhido no 2o turno, nos mesmos termos de origem. |
+| `eleitores_origem` | HUGEINT | Eleitores que escolheram a origem no 1o turno, dentro do escopo. E o denominador de fracao. Unidade: eleitor. |
+| `fracao` | DOUBLE | Parcela da origem estimada como tendo ido para o destino. Fracao entre 0 e 1, nao percentual. Por construcao, as fracoes de uma mesma origem somam 1. |
+| `fracao_min` | DOUBLE | Limite inferior da faixa de 95% de fracao, percentil 2,5 de 150 replicas de bootstrap que reamostram os MUNICIPIOS do escopo - nao os locais, que dentro de um municipio se parecem e estreitariam a faixa artificialmente. No DF, onde o municipio e unico, a reamostragem desce para a zona eleitoral. |
+| `fracao_max` | DOUBLE | Limite superior da faixa de 95% de fracao, percentil 97,5 das mesmas replicas. |
+| `eleitores` | HUGEINT | fracao x eleitores_origem: eleitores estimados nesse fluxo. Unidade: eleitor. |
+| `eleitores_min` | HUGEINT | fracao_min x eleitores_origem. Unidade: eleitor. |
+| `eleitores_max` | HUGEINT | fracao_max x eleitores_origem. Unidade: eleitor. |
+| `locais` | BIGINT | Locais de votacao que sustentaram a regressao do escopo, ja descontado o local sem par entre os turnos. Unidade: local. |
+| `municipios` | BIGINT | Municipios presentes no escopo. Unidade: municipio. |
 
 ## `fluxo_insumo` (tabela)
 
