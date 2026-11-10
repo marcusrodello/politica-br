@@ -113,6 +113,9 @@ Nada em `dados/` ou `_tmp/` está versionado.
 
 ## Fontes
 
+Levantamento completo, com endpoints sondados, cobertura e armadilhas de cada
+fonte: [`docs/fontes-e-esferas.md`](docs/fontes-e-esferas.md).
+
 | Fonte | Como se acessa |
 | --- | --- |
 | TSE | CKAN em `dadosabertos.tse.jus.br`. Boletins de urna em ZIP por UF e turno; o acervo histórico (1933–2026) em ZIP por ano, com um CSV por UF dentro |
