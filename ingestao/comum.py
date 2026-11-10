@@ -33,7 +33,7 @@ TMP = os.path.join(BASE, "_tmp")
 BANCO = os.path.join(BASE, "dados", "politica_br.duckdb")
 
 AGENTE = ("POLITICA_BR/0.1 (base de dados politicos oficiais; "
-          "github.com/marcus/politica_br)")
+          "github.com/marcusrodello/politica-br)")
 TENTATIVAS = 4
 ESPERA = 6          # segundos; dobra a cada tentativa
 
