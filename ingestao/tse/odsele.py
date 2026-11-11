@@ -141,7 +141,22 @@ def recursos(pacote):
 
 
 def pronto(con, conjunto, nome):
-    """Ja existe Parquet valido para esse ano? (a pasta do ano, nao um arquivo)"""
+    """Esse ano ja foi coletado por INTEIRO?
+
+    A pergunta nao pode ser "existe Parquet na pasta": quando a carga de um ano
+    morre no meio - e morreu, por memoria e por encoding - a pasta fica com 5
+    dos 29 arquivos, e olhar o disco declara o ano pronto. A lacuna some sem
+    aviso: 2016 e 2008 ficaram com um sexto dos candidatos e nada acusou.
+
+    O registro em main.coleta serve de marca de conclusao porque so e gravado
+    depois do ultimo CSV do ano. Existe registro -> o ano fechou.
+    """
+    con.execute(comum.CRIA_COLETA)
+    tem = con.execute("""SELECT COUNT(*) FROM main.coleta
+                         WHERE fonte = ? AND conjunto = ?""",
+                      [FONTE, f"{conjunto}/{nome}"]).fetchall()[0][0]
+    if not tem:
+        return False
     pasta = os.path.join(comum.PARQUET, FONTE, conjunto, nome)
     arqs = glob_.glob(os.path.join(pasta, "*.parquet"))
     return bool(arqs) and all(comum.parquet_valido(con, a) for a in arqs)

@@ -691,7 +691,7 @@ for schema, nome, comentario, tipo in objetos:
         WHERE table_name = ? AND schema_name = ?
         ORDER BY column_index
     """, [nome, schema]).fetchall()
-    n = con.execute(f'SELECT COUNT(*) FROM {schema}."{nome}"').fetchone()[0]
+    n = con.execute(f'SELECT COUNT(*) FROM {schema}."{nome}"').fetchall()[0][0]
     linhas += [f"## `{schema}.{nome}` ({tipo})", "",
                comentario or "_sem descrição_", "",
                f"Linhas: {n:,}".replace(",", "."), "",

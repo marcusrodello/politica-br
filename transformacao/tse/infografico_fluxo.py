@@ -97,7 +97,7 @@ def carrega(con):
 
     meta = con.execute("""
         SELECT any_value(locais), any_value(municipios) FROM fluxo_estimado
-        WHERE cargo = 'Presidente' AND escopo = 'BRASIL'""").fetchone()
+        WHERE cargo = 'Presidente' AND escopo = 'BRASIL'""").fetchall()[0]
     return fluxos, oficial, meta
 
 

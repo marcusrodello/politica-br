@@ -173,7 +173,7 @@ def registra(con, fonte, conjunto, arquivo, url, bytes_, linhas, sha256,
     con.execute(CRIA_COLETA)
     tem = con.execute("""SELECT COUNT(*) FROM duckdb_columns()
                          WHERE schema_name = 'main' AND table_name = 'coleta'
-                           AND column_name = 'observacao'""").fetchone()[0]
+                           AND column_name = 'observacao'""").fetchall()[0][0]
     if not tem:            # banco criado antes da coluna existir
         con.execute("ALTER TABLE main.coleta ADD COLUMN observacao VARCHAR")
     con.execute("""DELETE FROM main.coleta
@@ -198,92 +198,153 @@ memoria_livre_gb = _banco.memoria_livre_gb
 
 
 # =========================== CSV -> Parquet ===============================
-def csv_para_parquet(con, csv, destino, selecao="*", onde=None, delim=";",
-                     encoding="utf-8", extra=""):
-    """Converte CSV em Parquet, lendo tudo como texto e convertendo na selecao.
+def _copia(con, csv, destino, selecao, filtro, delim, encoding, extra,
+           tolerante=False):
+    """O COPY em si, isolado para poder rodar sobre outro arquivo e encoding.
 
     all_varchar=true de proposito: deixar o DuckDB inferir tipo varrendo o
     arquivo e o que estoura a memoria nos CSVs grandes, e um campo que muda de
     formato no meio do arquivo derruba a carga inteira. O preco e declarar o
     tipo na selecao, onde ele fica explicito e versionado.
 
-    Devolve (linhas, observacao). A observacao e None quando o CSV obedeceu ao
-    padrao e traz o motivo quando foi preciso relaxar o leitor: ha arquivo
-    oficial com aspas sem fechar - votacoesVotos-2021 da Camara tem uma linha
-    assim -, e nesse caso o modo tolerante LE a linha em vez de descartar, mas
-    isso fica anotado no registro de coleta para ninguem descobrir depois que
-    aquele ano entrou por um caminho diferente.
+    strict_mode=false aceita aspas sem fechar; null_padding completa com NULL a
+    linha que vem cortada no meio, preservando os campos que ela tem.
+    """
+    modo = ", strict_mode=false, null_padding=true" if tolerante else ""
+    con.execute(f"""
+        COPY (
+          SELECT {selecao}
+          FROM read_csv('{sql(csv)}', delim='{delim}', header=true,
+                        encoding='{encoding}', quote='"', all_varchar=true
+                        {modo}{extra})
+          {filtro}
+        ) TO '{sql(destino)}' (FORMAT PARQUET, COMPRESSION ZSTD)
+    """)
+    return con.sql(
+        f"SELECT COUNT(*) FROM read_parquet('{sql(destino)}')").fetchall()[0][0]
+
+
+def _conta_defeitos(con, csv, delim, encoding, extra):
+    """Quantas linhas do CSV violam o padrao, pelo registro do DuckDB.
+
+    Serve para a observacao dizer o tamanho do problema em vez de so avisar que
+    existe: sem esse numero, "lido em modo tolerante" pode significar uma linha
+    cortada ou um arquivo inteiro corrompido.
+    """
+    try:
+        con.execute("DROP TABLE IF EXISTS rejeito_erros")
+        con.execute("DROP TABLE IF EXISTS rejeito_scans")
+        # .fetchall() e obrigatorio: um resultado pendente trava a conexao para
+        # a consulta seguinte, que e justamente a dos rejeitos
+        con.sql(f"""
+            SELECT COUNT(*) FROM read_csv('{sql(csv)}', delim='{delim}',
+                   header=true, encoding='{encoding}', quote='"',
+                   all_varchar=true, ignore_errors=true,
+                   store_rejects=true, rejects_table='rejeito_erros',
+                   rejects_scan='rejeito_scans'{extra})""").fetchall()
+        erros = con.sql("""SELECT line, error_type FROM rejeito_erros
+                           ORDER BY line""").fetchall()
+        con.execute("DROP TABLE IF EXISTS rejeito_erros")
+        con.execute("DROP TABLE IF EXISTS rejeito_scans")
+        tipos = sorted({e[1] for e in erros})
+        quais = ", ".join(str(e[0]) for e in erros[:5])
+        if len(erros) > 5:
+            quais += ", ..."
+        return len(erros), f"{quais} [{'; '.join(tipos)}]"
+    except Exception as e:
+        log(f"  (nao foi possivel medir os defeitos: {type(e).__name__})")
+        return None, None
+
+
+def _recodifica_cp1252(csv):
+    """Reescreve o CSV de CP1252 para UTF-8 num arquivo ao lado.
+
+    Parte dos arquivos do TSE e CP1252 (Windows-1252), nao ISO-8859-1: usam os
+    bytes 0x80 a 0x9F, que o latin-1 estrito do DuckDB recusa - "File is not
+    latin-1 encoded" - e que ele nao sabe ler, porque so aceita utf-8, utf-16 e
+    latin-1. Recodificar e o unico caminho que preserva o acento: forcar a
+    leitura como latin-1 transformaria 0x93 em caractere de controle no meio do
+    nome do candidato.
+    """
+    convertido = csv + ".utf8"
+    with open(csv, "rb") as origem, open(convertido, "wb") as alvo:
+        while True:
+            bloco = origem.read(1 << 22)
+            if not bloco:
+                break
+            # CP1252 tem um byte por caractere, entao cortar em blocos nao
+            # parte caractere no meio
+            alvo.write(bloco.decode("cp1252", "replace").encode("utf-8"))
+    return convertido
+
+
+def csv_para_parquet(con, csv, destino, selecao="*", onde=None, delim=";",
+                     encoding="utf-8", extra=""):
+    """Converte CSV em Parquet, lendo tudo como texto e convertendo na selecao.
+
+    Devolve (linhas, observacao). A observacao e None quando o arquivo obedeceu
+    ao declarado, e traz o motivo quando foi preciso desviar - encoding
+    diferente do esperado, ou linha fora do padrao CSV. Isso vai para
+    main.coleta: carga que entrou por caminho diferente nao pode ficar
+    indistinguivel das outras.
     """
     filtro = f"WHERE {onde}" if onde else ""
 
-    def copia(tolerante):
-        # strict_mode=false aceita aspas sem fechar; null_padding completa com
-        # NULL a linha que vem cortada no meio, preservando os campos que ela
-        # tem - em votacoesVotos-2021 a parte intacta e justamente a que
-        # importa, o voto e o deputado
-        modo = ", strict_mode=false, null_padding=true" if tolerante else ""
-        con.execute(f"""
-            COPY (
-              SELECT {selecao}
-              FROM read_csv('{sql(csv)}', delim='{delim}', header=true,
-                            encoding='{encoding}', quote='"', all_varchar=true
-                            {modo}{extra})
-              {filtro}
-            ) TO '{sql(destino)}' (FORMAT PARQUET, COMPRESSION ZSTD)
-        """)
-        return con.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{sql(destino)}')").fetchone()[0]
+    def copia(enc, tolerante=False, arquivo=None):
+        return _copia(con, arquivo or csv, destino, selecao, filtro, delim,
+                      enc, extra, tolerante)
 
-    def conta_defeitos():
-        """Quantas linhas do CSV violam o padrao, pelo registro do DuckDB.
-
-        Serve para a observacao dizer o tamanho do problema em vez de so
-        avisar que existe: sem esse numero, 'lido em modo tolerante' pode
-        significar uma linha cortada ou um arquivo inteiro corrompido.
-        """
-        try:
-            con.execute("DROP TABLE IF EXISTS rejeito_erros")
-            con.execute("DROP TABLE IF EXISTS rejeito_scans")
-            # .fetchall() e obrigatorio: um resultado pendente trava a conexao
-            # para a consulta seguinte, que e justamente a dos rejeitos
-            con.sql(f"""
-                SELECT COUNT(*) FROM read_csv('{sql(csv)}', delim='{delim}',
-                       header=true, encoding='{encoding}', quote='"',
-                       all_varchar=true, ignore_errors=true,
-                       store_rejects=true, rejects_table='rejeito_erros',
-                       rejects_scan='rejeito_scans'{extra})""").fetchall()
-            erros = con.sql("""SELECT line, error_type FROM rejeito_erros
-                               ORDER BY line""").fetchall()
-            con.execute("DROP TABLE IF EXISTS rejeito_erros")
-            con.execute("DROP TABLE IF EXISTS rejeito_scans")
-            tipos = sorted({e[1] for e in erros})
-            quais = ", ".join(str(e[0]) for e in erros[:5])
-            if len(erros) > 5:
-                quais += ", ..."
-            return len(erros), f"{quais} [{'; '.join(tipos)}]"
-        except Exception as e:
-            log(f"  (nao foi possivel medir os defeitos: {type(e).__name__})")
-            return None, None
-
+    # 1. o encoding declarado
     try:
-        return copia(False), None
+        return copia(encoding), None
     except Exception as e:
-        if "CSV Error" not in str(e):
-            raise
-        n, linhas = conta_defeitos()
-        quais = f" (linha {linhas})" if linhas else ""
-        quantas = "indeterminadas" if n is None else f"{n}"
-        log(f"  CSV fora do padrao: {quantas} linha(s){quais}; "
-            f"relendo em modo tolerante")
-        return copia(True), (
-            f"{quantas} linha(s) fora do padrao CSV{quais}; lido com "
-            f"strict_mode=false e null_padding=true, sem descartar linha")
+        erro = e
+
+    msg = str(erro)
+    problema_de_encoding = ("Invalid unicode" in msg
+                            or ("encoded" in msg and "not" in msg))
+
+    # 2. o outro encoding comum, quando o problema e de encoding
+    if problema_de_encoding:
+        for alternativo in ("utf-8", "latin-1"):
+            if alternativo == encoding:
+                continue
+            try:
+                n = copia(alternativo)
+                log(f"  nao era {encoding}; lido como {alternativo}")
+                return n, (f"declarado {encoding}, lido como {alternativo}: "
+                           f"o portal mistura encoding entre anos")
+            except Exception:
+                pass
+
+        # 3. CP1252: recodifica e carrega do arquivo convertido
+        convertido = _recodifica_cp1252(csv)
+        try:
+            n = copia("utf-8", arquivo=convertido)
+        finally:
+            os.remove(convertido)
+        log(f"  nao era {encoding} nem utf-8; recodificado de cp1252")
+        return n, ("arquivo em CP1252, que o DuckDB nao le: recodificado para "
+                   "UTF-8 na carga, preservando os acentos")
+
+    # 4. linha fora do padrao CSV: mede o estrago e rele em modo tolerante
+    if "CSV Error" not in msg:
+        raise erro
+    n_def, quais = _conta_defeitos(con, csv, delim, encoding, extra)
+    quantas = "indeterminadas" if n_def is None else str(n_def)
+    onde_txt = f" (linha {quais})" if quais else ""
+    log(f"  CSV fora do padrao: {quantas} linha(s){onde_txt}; "
+        f"relendo em modo tolerante")
+    return copia(encoding, tolerante=True), (
+        f"{quantas} linha(s) fora do padrao CSV{onde_txt}; lido com "
+        f"strict_mode=false e null_padding=true, sem descartar linha")
+
 
 
 def linhas_parquet(con, destino):
     try:
         return con.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{sql(destino)}')").fetchone()[0]
+            f"SELECT COUNT(*) FROM read_parquet('{sql(destino)}')").fetchall()[0][0]
     except Exception:
         return None
 

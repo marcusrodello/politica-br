@@ -79,7 +79,7 @@ def recursos():
 def ja_registrado(con, arquivo):
     return con.execute("""SELECT COUNT(*) FROM main.coleta
                           WHERE fonte = ? AND conjunto = ? AND arquivo = ?""",
-                       [FONTE, CONJUNTO, arquivo]).fetchone()[0] > 0
+                       [FONTE, CONJUNTO, arquivo]).fetchall()[0][0] > 0
 
 
 def registra_retroativo(con, destino, arquivo, url):
