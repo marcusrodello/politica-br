@@ -22,13 +22,17 @@ pacotes no CKAN. Este script cobre os que sustentam o portal:
 As URLs vem do CKAN, nao montadas a mao: o TSE muda o caminho no CDN de vez em
 quando, e o catalogo e a unica fonte que acompanha.
 
-Cada ZIP traz um CSV por UF mais um BR consolidado; a carga le todos de uma vez
-com union_by_name, porque o arquivo BR as vezes tem coluna que os de UF nao
-tem.
+Cada ZIP traz um CSV por UF mais um BR consolidado, e a carga grava UM PARQUET
+POR CSV, em dados/parquet/tse/<conjunto>/<ano>/<UF>.parquet. Ler os 28 de uma
+vez estourava a memoria em maquina apertada; um a um, o pico cai para o tamanho
+de uma UF e a retomada nao perde o ano inteiro por causa do ultimo arquivo. Na
+leitura depois, o glob recursivo junta tudo igual - com union_by_name, porque o
+arquivo BR as vezes tem coluna que os de UF nao tem.
 
 Uso:  python ingestao/tse/odsele.py [--so CONJUNTO] [--desde ANO] [--listar]
 Retomavel: reexecutar pula o que ja tem Parquet valido.
 """
+import glob as glob_
 import os
 import shutil
 import sys
@@ -112,10 +116,24 @@ def recursos(pacote):
     return [(r.get("url") or "") for r in d["result"]["resources"]]
 
 
+def pronto(con, conjunto, nome):
+    """Ja existe Parquet valido para esse ano? (a pasta do ano, nao um arquivo)"""
+    pasta = os.path.join(comum.PARQUET, FONTE, conjunto, nome)
+    arqs = glob_.glob(os.path.join(pasta, "*.parquet"))
+    return bool(arqs) and all(comum.parquet_valido(con, a) for a in arqs)
+
+
 def processa(con, conjunto, nome, url):
-    """Baixa um ZIP do TSE, junta os CSVs de dentro e grava um Parquet."""
-    destino = comum.caminho(FONTE, conjunto, f"{nome}.parquet")
-    if os.path.exists(destino) and comum.parquet_valido(con, destino):
+    """Baixa um ZIP do TSE e grava UM PARQUET POR CSV de dentro.
+
+    Um por CSV, nao um por ano: o ZIP de um ano traz um arquivo por UF mais o
+    BR consolidado, e ler os 28 de uma vez - com union_by_name, que precisa
+    inspecionar todos antes de comecar - foi o que estourou a memoria quando a
+    maquina estava apertada. Carregando um a um, o pico cai para o tamanho de
+    uma UF, a retomada fica fina (nao se perde o ano inteiro por causa do
+    ultimo arquivo) e a leitura depois e a mesma coisa, por glob recursivo.
+    """
+    if pronto(con, conjunto, nome):
         return "pulado"
 
     zip_local = os.path.join(comum.TMP, f"tse_{conjunto}_{nome}.zip")
@@ -124,9 +142,10 @@ def processa(con, conjunto, nome, url):
         return None
     bytes_, sha, _ = saida
 
-    pasta = os.path.join(comum.TMP, f"tse_{conjunto}_{nome}")
-    shutil.rmtree(pasta, ignore_errors=True)
-    os.makedirs(pasta, exist_ok=True)
+    pasta_tmp = os.path.join(comum.TMP, f"tse_{conjunto}_{nome}")
+    shutil.rmtree(pasta_tmp, ignore_errors=True)
+    os.makedirs(pasta_tmp, exist_ok=True)
+    total, obs_geral, gravados = 0, None, 0
     try:
         with zipfile.ZipFile(zip_local) as z:
             csvs = [n for n in z.namelist() if n.lower().endswith(".csv")]
@@ -134,25 +153,34 @@ def processa(con, conjunto, nome, url):
                 comum.log(f"  {conjunto}/{nome}: ZIP sem CSV, pulando")
                 return None
             for n in csvs:
-                # alguns ZIPs tem subpasta; achata para o glob funcionar
-                alvo = os.path.join(pasta, os.path.basename(n))
+                alvo = os.path.join(pasta_tmp, os.path.basename(n))
                 with z.open(n) as f, open(alvo, "wb") as w:
                     shutil.copyfileobj(f, w, 1 << 22)
         os.remove(zip_local)
 
-        glob = comum.sql(os.path.join(pasta, "*.csv"))
-        linhas, obs = comum.csv_para_parquet(
-            con, glob, destino, delim=";", encoding="latin-1",
-            extra=", union_by_name=true")
+        for csv in sorted(glob_.glob(os.path.join(pasta_tmp, "*.csv"))):
+            # o sufixo do nome do CSV e a UF (consulta_cand_2026_AC.csv)
+            parte = os.path.splitext(os.path.basename(csv))[0].rsplit("_", 1)[-1]
+            destino = comum.caminho(FONTE, os.path.join(conjunto, nome),
+                                    f"{parte}.parquet")
+            if os.path.exists(destino) and comum.parquet_valido(con, destino):
+                continue
+            linhas, obs = comum.csv_para_parquet(
+                con, csv, destino, delim=";", encoding="latin-1")
+            total += linhas
+            gravados += 1
+            obs_geral = obs or obs_geral
+            os.remove(csv)
     finally:
-        shutil.rmtree(pasta, ignore_errors=True)
+        shutil.rmtree(pasta_tmp, ignore_errors=True)
         if os.path.exists(zip_local):
             os.remove(zip_local)
 
-    comum.registra(con, FONTE, conjunto, f"{nome}.parquet", url,
-                   bytes_, linhas, sha, obs)
-    comum.log(f"  {conjunto}/{nome}: {len(csvs)} CSVs, {bytes_ / 1e6:,.1f} MB "
-              f"-> {linhas:,} linhas" + (f"  [{obs}]" if obs else ""))
+    comum.registra(con, FONTE, f"{conjunto}/{nome}", "*.parquet", url,
+                   bytes_, total, sha, obs_geral)
+    comum.log(f"  {conjunto}/{nome}: {gravados} arquivos, "
+              f"{bytes_ / 1e6:,.1f} MB -> {total:,} linhas"
+              + (f"  [{obs_geral}]" if obs_geral else ""))
     return "ok"
 
 
@@ -189,7 +217,6 @@ def main():
         return 0
 
     con = comum.abre_banco()
-    con.execute("SET threads=4")
     comum.log(f"{len(unicos)} arquivos a processar")
     falhas, feitos = [], 0
     for i, (conjunto, nome, url) in enumerate(unicos, 1):

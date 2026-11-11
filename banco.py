@@ -69,9 +69,17 @@ def abre(somente_leitura=False, teto_gb=6, schema=None, threads=None,
     if not somente_leitura:
         livre = memoria_livre_gb()
         gb = teto_gb if livre is None else max(1, min(teto_gb, int(livre - 1)))
+        # CADA THREAD TEM SEU BUFFER. Com teto baixo, quatro threads lendo
+        # arquivos grandes batem no limite antes de qualquer uma terminar - foi
+        # assim que a carga do acervo do TSE falhou em 946 MiB de 953. Uma
+        # thread por GB de teto mantem o paralelismo onde ha folga e desiste
+        # dele onde nao ha, que e melhor que falhar rapido.
+        if threads is None:
+            threads = max(1, min(4, gb))
         if livre is not None and gb < teto_gb and not silencioso:
-            print(f"memoria livre {livre:.1f} GB; teto do banco em {gb} GB "
-                  f"(descarga em disco cobre o resto)", flush=True)
+            print(f"memoria livre {livre:.1f} GB; teto do banco em {gb} GB e "
+                  f"{threads} thread(s) (descarga em disco cobre o resto)",
+                  flush=True)
         con.execute(f"SET memory_limit='{gb}GB'")
         con.execute(f"SET temp_directory='{sql(TMP)}'")
     if threads:
