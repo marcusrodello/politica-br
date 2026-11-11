@@ -83,11 +83,35 @@ CONJUNTOS = {
 }
 
 
+# ordem de coleta, do mais valioso e leve ao mais pesado. Importa porque uma
+# execucao e interrompida com frequencia - o acervo tem dezenas de GB e os
+# arquivos variam de 100 KB a 1,25 GB - e quem para no meio quer ter na mao a
+# parte que sustenta o portal, nao a prestacao de contas de 2024 pela metade.
+PRIORIDADE = [
+    "municipio_tse_ibge",          # a ponte TSE-IBGE, 100 KB e indispensavel
+    "candidatos",                  # a espinha da identidade de politico
+    "legendas", "candidato_legenda", "vagas",          # a era 1933-1992
+    "votacao_candidato_uf", "votacao_partido_uf", "detalhe_votacao_uf",
+    "candidatos_complementar", "coligacoes",
+    "votacao_candidato_munzona", "votacao_partido_munzona",
+    "detalhe_votacao_munzona",
+    "bens_candidato",
+    "perfil_eleitorado",           # centenas de MB por ano
+    "contas_candidatos",           # mais de 1 GB por ano; por ultimo
+]
+
+
 def nome_conjunto(url):
     for pedaco, nome in CONJUNTOS.items():
         if pedaco in url:
             return nome
     return None
+
+
+def peso(conjunto):
+    """Posicao do conjunto na ordem de coleta; desconhecido vai para o fim."""
+    return PRIORIDADE.index(conjunto) if conjunto in PRIORIDADE \
+        else len(PRIORIDADE)
 
 
 def ano_de(pacote):
@@ -209,6 +233,11 @@ def main():
             continue
         vistos.add((conjunto, nome))
         unicos.append((conjunto, nome, url))
+
+    # na ordem de PRIORIDADE e, dentro do conjunto, do ano mais recente para o
+    # mais antigo: quem interrompe no meio fica com a parte util
+    unicos.sort(key=lambda a: (peso(a[0]),
+                               -(int(a[1]) if a[1].isdigit() else 0)))
 
     if "--listar" in sys.argv:
         for conjunto, nome, url in unicos:
