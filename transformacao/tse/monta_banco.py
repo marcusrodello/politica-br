@@ -24,6 +24,7 @@ Decisoes que vem da analise dos dados:
   aptos nos dois lados.
 """
 import os
+import sys
 
 import duckdb
 
@@ -33,21 +34,27 @@ PQ = os.path.join(BASE, "dados", "parquet", "tse", "bu_2026",
                   "*.parquet").replace("\\", "/")
 BANCO = os.path.join(BASE, "dados", "politica_br.duckdb")
 
-con = duckdb.connect(BANCO)
-con.execute("SET preserve_insertion_order=false")
-con.execute("SET memory_limit='6GB'")
-con.execute(f"SET temp_directory='{os.path.join(BASE, '_tmp').replace(chr(92), '/')}'")
+sys.path.insert(0, BASE)
+import banco                                                  # noqa: E402
 
-con.execute("CREATE SCHEMA IF NOT EXISTS tse")
-con.execute("USE tse")
+con = banco.abre(schema="tse")
 
 # residuo da epoca em que tudo vivia em main, antes de haver uma segunda fonte.
-# Em base nova nao existe nada disso e o DROP nao faz nada; em base antiga,
+# Em base nova nao existe nada disso e o laco nao faz nada; em base antiga,
 # evita conviver com duas copias das mesmas tabelas, uma delas desatualizando.
-for velha in ("bu", "secao", "local", "votos_local", "fluxo_insumo",
-              "fluxo_estimado"):
-    con.execute(f"DROP VIEW IF EXISTS main.{velha}")
-    con.execute(f"DROP TABLE IF EXISTS main.{velha}")
+# O tipo vem do catalogo porque DROP VIEW IF EXISTS nao e inofensivo quando o
+# objeto existe como tabela: o DuckDB erra em vez de ignorar.
+VELHAS = ("bu", "secao", "local", "votos_local", "fluxo_insumo",
+          "fluxo_estimado")
+for nome, tipo in con.execute("""
+        SELECT table_name, 'TABLE' FROM duckdb_tables()
+         WHERE schema_name = 'main' AND table_name IN ?
+        UNION ALL
+        SELECT view_name, 'VIEW' FROM duckdb_views()
+         WHERE schema_name = 'main' AND view_name IN ?
+    """, [list(VELHAS), list(VELHAS)]).fetchall():
+    con.execute(f"DROP {tipo} IF EXISTS main.{nome}")
+    print(f"removido residuo main.{nome} ({tipo.lower()})")
 
 con.execute(f"CREATE OR REPLACE VIEW bu AS SELECT * FROM read_parquet('{PQ}')")
 

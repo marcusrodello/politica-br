@@ -18,6 +18,20 @@ Duas coisas que a estrutura da Camara obriga a tratar:
   antes de 2001 - votava, e o registro aberto e que nao existe. A conferencia
   no fim mostra a cobertura de cada tabela por ano.
 
+E duas descobertas das conferencias, que mudam o que se pode fazer com o dado:
+
+- O CPF DO DEPUTADO VEM VAZIO. A coluna existe no arquivo da Camara e esta
+  preenchida em ZERO das 7.890 linhas. Isso tira do caminho a chave obvia para
+  amarrar a mesma pessoa entre Camara, Senado e TSE: a identidade vai ter de
+  sair de nome, data de nascimento e UF, que e justamente o problema difícil
+  do projeto. Melhor saber agora do que depois de construir em cima.
+
+- ano = 0 EM 390.899 PROPOSICOES, 39% do total. Nao e erro de conversao: sao
+  pareceres (PAR), substitutivos (SBT) e afins, que nao tem ano proprio, e a
+  Camara grava zero. Zero como ano envenena qualquer agregacao por tempo - um
+  MIN(ano) ingenuo devolve o ano zero -, entao a carga converte para NULL, que
+  e o que "nao tem ano" quer dizer. O valor cru segue no Parquet.
+
 Uso:  python transformacao/camara/monta_banco.py
 """
 import glob
@@ -25,6 +39,10 @@ import os
 import sys
 
 import duckdb
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+import banco                                                  # noqa: E402
 
 # raiz do repositorio: transformacao/camara/ -> duas acima
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -129,7 +147,9 @@ TABELAS = [
      SELECT TRY_CAST(id AS BIGINT) AS id_proposicao,
             siglaTipo AS sigla_tipo, descricaoTipo AS tipo,
             TRY_CAST(numero AS INTEGER) AS numero,
-            TRY_CAST(ano AS INTEGER)    AS ano,
+            -- zero aqui quer dizer "sem ano proprio" (parecer, substitutivo),
+            -- e zero como ano envenena agregacao por tempo
+            nullif(TRY_CAST(ano AS INTEGER), 0)     AS ano,
             TRY_CAST(dataApresentacao AS TIMESTAMP) AS apresentada_em,
             ementa, ementaDetalhada AS ementa_detalhada,
             keywords AS palavras_chave,
@@ -155,7 +175,7 @@ TABELAS = [
               AS id_proposicao,
             siglaTipo AS sigla_tipo,
             TRY_CAST(numero AS INTEGER) AS numero,
-            TRY_CAST(ano AS INTEGER)    AS ano,
+            nullif(TRY_CAST(ano AS INTEGER), 0) AS ano,
             TRY_CAST(codTema AS INTEGER) AS cod_tema, tema,
             TRY_CAST(relevancia AS INTEGER) AS relevancia
      FROM {{f}}"""),
@@ -192,7 +212,7 @@ TABELAS = [
             TRY_CAST(proposicao_id AS BIGINT) AS id_proposicao,
             proposicao_siglaTipo AS sigla_tipo,
             TRY_CAST(proposicao_numero AS INTEGER) AS numero,
-            TRY_CAST(proposicao_ano AS INTEGER)    AS ano,
+            nullif(TRY_CAST(proposicao_ano AS INTEGER), 0) AS ano,
             proposicao_ementa AS ementa, proposicao_titulo AS titulo
      FROM {f}"""),
 
@@ -227,18 +247,35 @@ TABELAS = [
 ]
 
 
+# tabelas grandes demais para um CREATE TABLE AS de uma vez: a cota parlamentar
+# tem 5,2 milhoes de linhas e 32 colunas de texto, e o pico de memoria da carga
+# unica derruba a maquina quando ela esta com pouca RAM livre. Carregadas arquivo
+# por arquivo - um por ano -, o pico cai para o tamanho de um ano.
+POR_ARQUIVO = {"despesa"}
+
+
+def carrega_em_partes(con, tabela, conjunto, sql):
+    """Cria a tabela com o primeiro arquivo e insere os demais um a um."""
+    arquivos = sorted(glob.glob(
+        os.path.join(PQ, conjunto, "*.parquet").replace("\\", "/")))
+    for i, arq in enumerate(arquivos):
+        leitura = f"read_parquet('{arq}', union_by_name=true)"
+        corpo = sql.format(f=leitura)
+        if i == 0:
+            con.execute(f"CREATE OR REPLACE TABLE {tabela} AS {corpo}")
+        else:
+            # BY NAME porque um ano pode ter coluna que outro nao tem
+            con.execute(f"INSERT INTO {tabela} BY NAME {corpo}")
+    print(f"  ({tabela}: {len(arquivos)} arquivos carregados um a um)")
+
+
 def mostra(con, titulo, sql):
     print(f"\n--- {titulo} ---")
     print(con.sql(sql))
 
 
 def main():
-    con = duckdb.connect(BANCO)
-    con.execute("SET preserve_insertion_order=false")
-    con.execute("SET memory_limit='6GB'")
-    con.execute(f"SET temp_directory='{os.path.join(BASE, '_tmp').replace(chr(92), '/')}'")
-    con.execute("CREATE SCHEMA IF NOT EXISTS camara")
-    con.execute("USE camara")
+    con = banco.abre(schema="camara")
 
     feitas, ausentes = [], []
     for tabela, conjunto, sql in TABELAS:
@@ -246,9 +283,14 @@ def main():
         if not f:
             ausentes.append(f"{tabela} (falta {conjunto})")
             continue
-        con.execute(f"CREATE OR REPLACE TABLE {tabela} AS "
-                    + sql.format(f=f))
-        n = con.execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
+        if tabela in POR_ARQUIVO:
+            carrega_em_partes(con, tabela, conjunto, sql)
+        else:
+            con.execute(f"CREATE OR REPLACE TABLE {tabela} AS "
+                        + sql.format(f=f))
+        # fetchall, nao fetchone: fetchone deixa o cursor aberto e a consulta
+        # seguinte falha com "connection has an unfinished result"
+        n = con.sql(f"SELECT COUNT(*) FROM {tabela}").fetchall()[0][0]
         feitas.append((tabela, n))
         print(f"  {tabela:<18} {n:>12,} linhas".replace(",", "."))
 
@@ -316,12 +358,23 @@ def main():
     ORDER BY 2
     """)
 
-    mostra(con, "deputado com CPF preenchido (a chave entre bases)", """
+    # a coluna existe no arquivo da Camara e vem vazia em todas as linhas;
+    # a conferencia fica para o dia em que isso mudar
+    mostra(con, "o CPF do deputado continua vazio na origem?", """
     SELECT COUNT(*) AS deputados,
            COUNT(*) FILTER (cpf IS NOT NULL AND length(trim(cpf)) > 0)
              AS com_cpf,
-           COUNT(DISTINCT cpf) AS cpfs_distintos
+           COUNT(*) FILTER (nome_civil IS NOT NULL
+                            AND length(trim(nome_civil)) > 0) AS com_nome_civil,
+           COUNT(*) FILTER (data_nascimento IS NOT NULL) AS com_nascimento
     FROM deputado
+    """)
+
+    mostra(con, "proposicao sem ano proprio (parecer, substitutivo)", """
+    SELECT COUNT(*) AS proposicoes,
+           COUNT(*) FILTER (ano IS NULL) AS sem_ano,
+           round(100.0 * COUNT(*) FILTER (ano IS NULL) / COUNT(*), 1) AS pct
+    FROM proposicao
     """)
 
     con.close()
