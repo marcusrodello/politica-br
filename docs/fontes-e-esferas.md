@@ -36,6 +36,20 @@ resultado vem agregado por UF, não por município e zona. `votacao_candidato_uf
 e `votacao_candidato_munzona` respondem a perguntas diferentes, e o nome do
 candidato antes de 1994 nem sempre identifica uma pessoa.
 
+### Três irregularidades do acervo do TSE, todas silenciosas
+
+Nenhuma dá erro visível; todas fazem dado desaparecer sem aviso.
+
+| Irregularidade | Onde | Consequência se ignorada |
+| --- | --- | --- |
+| Arquivos em **CP1252**, não ISO-8859-1 | `consulta_cand` de 2008 e 2016 | o DuckDB recusa o arquivo ("File is not latin-1 encoded") e **1,66 milhão de candidaturas** ficam fora. Forçar latin-1 corromperia o acento no meio do nome; a carga recodifica para UTF-8 |
+| Extensão **`.txt`**, não `.csv` | todos os pacotes de 1933 a 1992 | **103 dos 228 arquivos** eram descartados com a mensagem "ZIP sem CSV", que parece diagnóstico de pacote vazio |
+| **Sem linha de cabeçalho** | `votacao_candidato_uf` e afins, era antiga | ler o primeiro registro como nomes de coluna perde uma linha de dado e deixa a tabela com nomes que são valores. A detecção olha o primeiro campo, sempre `DATA_GERACAO` ou `DT_GERACAO` quando há cabeçalho |
+
+Quando não há cabeçalho, as colunas ficam `column0, column1…` e o registro de
+coleta diz isso e aponta o Leia-me do pacote, que traz o layout. O projeto não
+inventa nome para dado que não declara o seu.
+
 A tabela `municipio_tse_ibge` é a ponte entre o código de município do TSE e o
 do IBGE. Sem ela não se cruza eleição com indicador social — o TSE usa
 numeração própria, que não é a do IBGE.
@@ -138,12 +152,20 @@ código.
 séries e **não publica catálogo por API** — o que existe é busca web. As séries
 entram por lista explícita; varrer o espaço de códigos seria chute.
 
-## O que a sondagem ensinou sobre operação
+## O que a operação ensinou
+
+Tudo aqui saiu de falha real nesta base, não de precaução teórica. O padrão é
+um: **o erro que aparece não é o erro que houve.**
 
 - **Download que não confere tamanho mente.** Um arquivo da Câmara chegou
   cortado e passou como bom: 16 mil votos a menos, e o CSV pareceu defeituoso
   na origem quando o problema era local. A causa só apareceu porque a segunda
   tentativa trouxe mais linhas. Hoje o download confere o `Content-Length`.
+- **"Já coletei isso" não se responde olhando o disco.** Quando a carga de um
+  ano morre no meio, a pasta fica com 5 dos 29 arquivos e a pergunta responde
+  que o ano está pronto — 2016 e 2008 ficaram com um sexto dos candidatos e
+  nada acusou. A marca de conclusão é o registro em `main.coleta`, gravado só
+  depois do último arquivo.
 - **Os portais caem.** A API da Câmara responde 503 em rajadas; o Senado estoura
   o tempo de leitura com frequência. Toda requisição tem retry com espera
   crescente, e os conjuntos longos gravam em lotes para uma falha tardia não
@@ -151,6 +173,16 @@ entram por lista explícita; varrer o espaço de códigos seria chute.
 - **404 não é falha de rede.** Na Câmara ele significa "esse ano não existe", e
   repetir não ajuda. O fim de uma série se descobre assim — ou, no Senado, por
   resposta 200 com lista vazia.
-- **A memória da máquina entra na conta.** O teto de memória do DuckDB se adapta
-  à RAM livre: pedir 6 GB com 2 GB livres não faz ele economizar, faz ele
-  aceitar e falhar na primeira alocação grande.
+- **A memória da máquina entra na conta, e o paralelismo também.** O teto do
+  DuckDB se adapta à RAM livre: pedir 6 GB com 2 GB livres não faz ele
+  economizar, faz ele aceitar e falhar na primeira alocação grande. E cada
+  thread tem seu buffer — quatro threads com teto de 1 GB batem no limite antes
+  de qualquer uma terminar, então o número de threads acompanha o teto.
+- **Tabela grande carrega em partes.** A cota parlamentar (5,2 mi de linhas) e
+  os ZIPs do TSE (28 CSVs cada) não entram num `CREATE TABLE AS` único em
+  máquina apertada. Carregados arquivo por arquivo, o pico cai para o tamanho
+  de uma parte.
+- **Dado que entrou por caminho diferente não pode ficar indistinguível.**
+  Encoding trocado, linha fora do padrão CSV, arquivo sem cabeçalho, instante
+  de coleta inferido: tudo isso vai para `coleta.observacao`. Carga limpa tem
+  observação vazia — é como se sabe que foi limpa.

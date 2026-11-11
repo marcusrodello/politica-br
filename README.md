@@ -46,13 +46,18 @@ converteu — senão o estrago fica silencioso.
 
 ## Estado atual
 
-| Fonte | Situação |
-| --- | --- |
-| TSE — boletins de urna 2026 | 9,0 milhões de linhas, 94.709 locais de votação |
-| TSE — fluxo de votos entre os turnos | estimado, com infográfico |
-| Câmara dos Deputados | 420 arquivos, 11,9 milhões de linhas |
-| Senado Federal | em andamento |
-| STF, Executivo federal, IBGE, Ipea | não iniciado |
+| Fonte | Situação | No banco |
+| --- | --- | --- |
+| TSE — boletins de urna 2026 | 9,0 mi de linhas, 94.709 locais de votação | `tse` (5 tabelas) |
+| TSE — fluxo entre os turnos | estimado, com infográfico | `tse.fluxo_estimado` |
+| TSE — acervo eleitoral 1933–2026 | em coleta; 6,29 mi de candidaturas já dentro | — |
+| Câmara dos Deputados | 420 arquivos, 11,9 mi de linhas | `camara` (17 tabelas) |
+| Senado Federal | 422 arquivos, 710 mil linhas | `senado` (11 tabelas) |
+| Ipea, IBGE, Banco Central | scripts prontos, não executados | — |
+| Judiciário (DataJud), Portal da Transparência | dependem de chave de API | — |
+
+O dicionário cobre as 34 tabelas e 384 colunas, com 100% de descrição:
+[`docs/dicionario.md`](docs/dicionario.md).
 
 O que entrou da Câmara, e até onde cada série alcança:
 
@@ -68,10 +73,15 @@ O que entrou da Câmara, e até onde cada série alcança:
 | votações | 1988–2026 | 194.412 |
 | cargos em órgãos, por legislatura | L52–L58 | 85.857 |
 | eventos e sessões | 1991–2026 | 62.732 |
-| deputados, com CPF e biografia | todos | 7.890 |
+| deputados, com nome civil e biografia | todos | 7.890 |
 
 Mais ocupações e profissões declaradas, órgãos, frentes, partidos e as 58
 legislaturas desde 1826.
+
+**O CPF do deputado vem vazio** nas 7.890 linhas — a coluna existe no arquivo da
+Câmara e não está preenchida em nenhuma. Isso tira do caminho a chave óbvia para
+amarrar a mesma pessoa entre as fontes; sobram nome civil (7.890 preenchidos) e
+data de nascimento (7.006).
 
 Notas por módulo:
 
@@ -84,14 +94,29 @@ Notas por módulo:
 
 ## Como reconstruir a base
 
+Ingestão, uma fonte por vez:
+
 ```
-python ingestao/tse/boletins_urna.py          # 56 pacotes do TSE -> Parquet
-python ingestao/camara/dados_abertos.py       # arquivos em lote da Câmara -> Parquet
+python ingestao/tse/boletins_urna.py       # 56 pacotes de boletim de urna de 2026
+python ingestao/tse/odsele.py              # acervo eleitoral 1933-2026 (228 arquivos)
+python ingestao/camara/dados_abertos.py    # arquivos em lote da Câmara
+python ingestao/senado/dados_abertos.py    # API do Senado
+python ingestao/ipea/series.py             # as 4.135 séries do Ipeadata
+python ingestao/ibge/agregados.py          # localidades e agregados do SIDRA
+python ingestao/bcb/series.py              # séries do SGS do Banco Central
+python ingestao/judiciario/datajud.py      # STF, STJ e TSE (precisa de chave)
+```
+
+Transformação e documentação:
+
+```
 python transformacao/tse/monta_banco.py       # tabelas do TSE e as conferências
+python transformacao/camara/monta_banco.py    # 17 tabelas da Câmara
+python transformacao/senado/monta_banco.py    # 11 tabelas do Senado
 python transformacao/tse/estima_fluxo.py      # matriz de fluxo entre turnos (~8 min)
 python transformacao/documenta_banco.py       # descrições no banco e dicionário
 python transformacao/tse/infografico_fluxo.py # infográfico de fluxo
-python ingestao/confere_coleta.py             # confere a integridade do que foi coletado
+python ingestao/confere_coleta.py             # confere a integridade do coletado
 ```
 
 As ingestões são retomáveis: reexecutar pula o que já tem Parquet válido — e
@@ -102,14 +127,17 @@ Nada em `dados/` ou `_tmp/` está versionado.
 
 ## Próximos passos
 
-1. separar as tabelas por fonte em schemas do DuckDB (`tse.bu`, `camara.…`) —
-   hoje tudo vive em `main` e os nomes genéricos (`bu`, `secao`, `local`) vão
-   colidir quando entrar a segunda fonte
-2. ingestão do Senado, do TSE histórico (candidatos desde 1933) e dos
-   indicadores (IBGE, Ipea, Tesouro, Banco Central)
-3. padronização de identidade de político entre as bases — o maior desafio do
-   projeto: a mesma pessoa aparece escrita diferente em cada fonte
-4. site estático com perfil de político e página de eleição
+1. terminar o acervo do TSE: falta a votação por município e zona, o perfil do
+   eleitorado e a prestação de contas de campanha
+2. rodar as ingestões de indicadores — Ipea, IBGE e Banco Central, todas com
+   script pronto
+3. **padronização de identidade de político entre as bases** — o maior desafio
+   do projeto, e mais difícil do que parecia: o CPF, que seria a chave natural,
+   vem vazio na Câmara. A amarração terá de sair de nome civil, data de
+   nascimento e UF, com o cadastro de candidatos do TSE (6,29 mi de linhas,
+   onde o CPF existe em parte dos anos) como ponte
+4. ingestão do Tesouro (SICONFI), que é aberta e ainda não foi escrita
+5. site estático com perfil de político e página de eleição
 
 ## Fontes
 
