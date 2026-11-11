@@ -187,9 +187,13 @@ def processa(con, conjunto, nome, url):
     total, obs_geral, gravados = 0, None, 0
     try:
         with zipfile.ZipFile(zip_local) as z:
-            csvs = [n for n in z.namelist() if n.lower().endswith(".csv")]
+            # .txt tambem: os pacotes de 1933 a 1992 usam essa extensao, com
+            # o mesmo delimitador. Aceitar so .csv fazia o script pular a era
+            # inteira dizendo "ZIP sem CSV" - 103 arquivos passando em branco
+            csvs = [n for n in z.namelist()
+                    if n.lower().endswith((".csv", ".txt"))]
             if not csvs:
-                comum.log(f"  {conjunto}/{nome}: ZIP sem CSV, pulando")
+                comum.log(f"  {conjunto}/{nome}: ZIP sem CSV nem TXT, pulando")
                 return None
             for n in csvs:
                 alvo = os.path.join(pasta_tmp, os.path.basename(n))
@@ -197,7 +201,9 @@ def processa(con, conjunto, nome, url):
                     shutil.copyfileobj(f, w, 1 << 22)
         os.remove(zip_local)
 
-        for csv in sorted(glob_.glob(os.path.join(pasta_tmp, "*.csv"))):
+        extraidos = (glob_.glob(os.path.join(pasta_tmp, "*.csv"))
+                     + glob_.glob(os.path.join(pasta_tmp, "*.txt")))
+        for csv in sorted(extraidos):
             # o sufixo do nome do CSV e a UF (consulta_cand_2026_AC.csv)
             parte = os.path.splitext(os.path.basename(csv))[0].rsplit("_", 1)[-1]
             destino = comum.caminho(FONTE, os.path.join(conjunto, nome),

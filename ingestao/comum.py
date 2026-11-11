@@ -199,7 +199,7 @@ memoria_livre_gb = _banco.memoria_livre_gb
 
 # =========================== CSV -> Parquet ===============================
 def _copia(con, csv, destino, selecao, filtro, delim, encoding, extra,
-           tolerante=False):
+           tolerante=False, header=True):
     """O COPY em si, isolado para poder rodar sobre outro arquivo e encoding.
 
     all_varchar=true de proposito: deixar o DuckDB inferir tipo varrendo o
@@ -214,7 +214,8 @@ def _copia(con, csv, destino, selecao, filtro, delim, encoding, extra,
     con.execute(f"""
         COPY (
           SELECT {selecao}
-          FROM read_csv('{sql(csv)}', delim='{delim}', header=true,
+          FROM read_csv('{sql(csv)}', delim='{delim}',
+                        header={'true' if header else 'false'},
                         encoding='{encoding}', quote='"', all_varchar=true
                         {modo}{extra})
           {filtro}
@@ -256,6 +257,24 @@ def _conta_defeitos(con, csv, delim, encoding, extra):
         return None, None
 
 
+def tem_cabecalho(arquivo, delim=";"):
+    """A primeira linha e cabecalho ou ja e dado?
+
+    Os pacotes antigos do TSE nao tem cabecalho: votacao_candidato_uf_1945
+    comeca direto em "30/4/2014";"16:31:48";"1945" - a data de geracao do
+    arquivo -, enquanto consulta_legendas_1933 comeca em "DATA_GERACAO". Ler o
+    primeiro registro como nome de coluna perderia uma linha de dado E deixaria
+    a tabela com nomes de coluna que sao valores.
+
+    A deteccao olha o primeiro campo: todo arquivo do TSE que tem cabecalho
+    comeca por DATA_GERACAO ou DT_GERACAO.
+    """
+    with open(arquivo, "rb") as fh:
+        primeira = fh.readline(4096).decode("latin-1", "replace")
+    campo = primeira.split(delim)[0].strip().strip('"').upper()
+    return campo in ("DATA_GERACAO", "DT_GERACAO")
+
+
 def _recodifica_cp1252(csv):
     """Reescreve o CSV de CP1252 para UTF-8 num arquivo ao lado.
 
@@ -279,7 +298,7 @@ def _recodifica_cp1252(csv):
 
 
 def csv_para_parquet(con, csv, destino, selecao="*", onde=None, delim=";",
-                     encoding="utf-8", extra=""):
+                     encoding="utf-8", extra="", header=None):
     """Converte CSV em Parquet, lendo tudo como texto e convertendo na selecao.
 
     Devolve (linhas, observacao). A observacao e None quando o arquivo obedeceu
@@ -289,14 +308,19 @@ def csv_para_parquet(con, csv, destino, selecao="*", onde=None, delim=";",
     indistinguivel das outras.
     """
     filtro = f"WHERE {onde}" if onde else ""
+    if header is None:
+        header = tem_cabecalho(csv, delim)
+    sem_cabecalho = (" ; arquivo sem linha de cabecalho: colunas nomeadas "
+                     "column0, column1... e o layout esta no Leia-me do "
+                     "pacote de origem") if not header else ""
 
     def copia(enc, tolerante=False, arquivo=None):
         return _copia(con, arquivo or csv, destino, selecao, filtro, delim,
-                      enc, extra, tolerante)
+                      enc, extra, tolerante, header)
 
     # 1. o encoding declarado
     try:
-        return copia(encoding), None
+        return copia(encoding), (sem_cabecalho.lstrip(' ;') or None)
     except Exception as e:
         erro = e
 
